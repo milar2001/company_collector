@@ -1,8 +1,4 @@
 {
-    "categories": [
-        "uslugi"
-    ],
-    "wojewodztwa": [
-        "pomorskie"
-    ]
+    "categories": ["uslugi"],
+    "wojewodztwa": ["pomorskie"]
 }

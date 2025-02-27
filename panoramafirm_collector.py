@@ -1,17 +1,18 @@
 import requests
 from bs4 import BeautifulSoup
-import re
+import json
 import math
 import urllib.parse
-import json
 import os
+import asyncio
+import re
+from description_checker import fetch_and_analyze_html  # Import modułu analizy HTML
 
 CONFIG_FILE = "config.json"
 OUTPUT_FILE = "output.json"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
-
 
 def load_config():
     """ Wczytuje plik JSON z kategoriami i województwami. """
@@ -27,7 +28,6 @@ def load_config():
 
     with open(CONFIG_FILE, "r", encoding="utf-8") as file:
         return json.load(file)
-
 
 def get_total_pages(base_url):
     """ Pobiera liczbę stron dla danej kategorii i województwa. """
@@ -48,7 +48,6 @@ def get_total_pages(base_url):
     print("Nie udało się znaleźć liczby firm.")
     return 1
 
-
 def get_page_data(page_url):
     """ Pobiera i przetwarza dane z pojedynczej strony firm. """
     print(f"Pobieram stronę: {page_url}")
@@ -61,7 +60,6 @@ def get_page_data(page_url):
     soup = BeautifulSoup(response.text, "html.parser")
     return soup.find_all("li", class_="company-item")
 
-
 def parse_company_data(company):
     """ Parsuje dane firmy z HTML. """
     name_tag = company.find("a", class_="company-name")
@@ -70,31 +68,39 @@ def parse_company_data(company):
     company_link = name_tag["href"] if name_tag else None
     company_link = urllib.parse.quote(company_link, safe=':/?=&') if company_link else "Brak"
 
-    address_tag = company.find("div", class_="address")
-    address = address_tag.text.strip() if address_tag else "Brak"
-    address = re.sub(r"\s*w odległości:\s*\d+\s*(km|m)", "", address).strip()
-
     phone_tag = company.find("a", class_="icon-telephone")
     phone = phone_tag["title"].strip() if phone_tag and "title" in phone_tag.attrs else "Brak"
 
     website_tag = company.find("a", class_="icon-website")
     website = website_tag["href"].strip() if website_tag and "href" in website_tag.attrs else "Brak"
 
-    # Usuwamy firmy, które nie mają numeru telefonu lub strony WWW
     if phone == "Brak" or website == "Brak":
-        return None  # Firma nie spełnia warunków, nie dodajemy jej do wyników
+        return None
 
     return {
         "Nazwa firmy": company_name,
-        "Adres": address,
         "Numer telefonu": phone,
         "Strona WWW": website,
         "Link do firmy": company_link
     }
 
+async def process_companies(companies):
+    """ Pobiera pełny HTML i analizuje firmy asynchronicznie """
+    company_links = [company["Link do firmy"] for company in companies if company["Link do firmy"] != "Brak"]
+    descriptions = await fetch_and_analyze_html(company_links)
+
+    final_companies = []
+    for company in companies:
+        for link, matches in descriptions:
+            if company["Link do firmy"] == link:
+                company["Liczba dopasowanych słów"] = matches
+                final_companies.append(company)
+                break
+
+    return final_companies
 
 def scrape_all():
-    """ Pobiera dane firm dla wszystkich kategorii i województw z pliku JSON. """
+    """ Pobiera dane firm dla wszystkich kategorii i województw. """
     config = load_config()
     all_companies = {}
 
@@ -110,24 +116,30 @@ def scrape_all():
 
                 for company in companies:
                     company_data = parse_company_data(company)
-
-                    if company_data:  # Jeśli firma spełnia warunki (ma telefon + WWW)
+                    if company_data:
                         phone = company_data["Numer telefonu"]
-
-                        # Usuwanie duplikatów na podstawie numeru telefonu
                         if phone not in all_companies:
                             all_companies[phone] = company_data
 
     return list(all_companies.values())
 
-
 def save_results(companies):
-    """ Zapisuje dane firm do pliku JSON. """
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as file:
-        json.dump(companies, file, indent=4, ensure_ascii=False)
-    print(f"Zapisano {len(companies)} firm do pliku {OUTPUT_FILE}.")
+    """ Zapisuje dane firm do pliku JSON, sortując malejąco według liczby dopasowanych słów. """
+    sorted_companies = sorted(companies, key=lambda x: x["Liczba dopasowanych słów"], reverse=True)
 
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as file:
+        json.dump(sorted_companies, file, indent=4, ensure_ascii=False)
+
+    print(f"Zapisano {len(sorted_companies)} firm do pliku {OUTPUT_FILE}.")
 
 if __name__ == "__main__":
     company_data = scrape_all()
-    save_results(company_data)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    filtered_companies = loop.run_until_complete(process_companies(company_data))
+    save_results(filtered_companies)
