@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/collector.iml" filepath="$PROJECT_DIR$/.idea/collector.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/google_maps_finder.iml" filepath="$PROJECT_DIR$/.idea/google_maps_finder.iml" />
     </modules>
   </component>
 </project>
