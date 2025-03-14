@@ -4,6 +4,8 @@ import aiohttp
 import time
 from tqdm import tqdm  # Pasek postępu
 from excel_saver import save_to_excel
+from aiohttp import ClientSession, ClientTimeout
+from asyncio import Semaphore
 
 # Wczytanie klucza API
 with open("config.json", "r", encoding="utf-8") as f:
@@ -21,6 +23,9 @@ except Exception as e:
     print(f"❌ Błąd wczytywania pliku categories.json: {e}")
     exit()
 
+# Ograniczenie liczby jednoczesnych zapytań do API (np. 2)
+SEMAPHORE = Semaphore(2)
+
 # Pobieranie współrzędnych miasta
 async def get_city_coordinates(session, city_name):
     base_url = "https://maps.googleapis.com/maps/api/geocode/json"
@@ -36,7 +41,7 @@ async def get_city_coordinates(session, city_name):
     print(f"❌ Nie znaleziono współrzędnych dla miasta: {city_name}")
     return None
 
-# Pobieranie firm z Google Places API z obsługą paginacji
+# Pobieranie firm z Google Places API z obsługą paginacji i ograniczeniem zapytań
 async def fetch_places(session, term, location, radius, progress_bar):
     """ Pobiera firmy z API Google Places dla danej frazy i paginuje wyniki. """
     places_data = []
@@ -70,44 +75,57 @@ async def fetch_places(session, term, location, radius, progress_bar):
             "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.googleMapsUri,places.internationalPhoneNumber,places.websiteUri,nextPageToken"
         }
 
-        async with session.post("https://places.googleapis.com/v1/places:searchText", json=params, headers=headers) as response:
-            data = await response.json()
+        async with SEMAPHORE:  # Ograniczenie liczby równoczesnych zapytań
+            for retry in range(3):  # Maksymalnie 3 próby w przypadku błędu 502
+                try:
+                    async with session.post("https://places.googleapis.com/v1/places:searchText", json=params, headers=headers) as response:
+                        if response.status == 502:
+                            print(f"⚠️ Błąd 502, ponawiam próbę ({retry + 1}/3)...")
+                            await asyncio.sleep(2**retry)  # Backoff
+                            continue
 
-            if "places" in data:
-                for place in data["places"]:
-                    phone_number = place.get("internationalPhoneNumber", None)
-                    if not phone_number:
-                        continue
+                        data = await response.json()
+                        if "places" in data:
+                            for place in data["places"]:
+                                phone_number = place.get("internationalPhoneNumber", None)
+                                if not phone_number:
+                                    continue
 
-                    places_data.append([
-                        term,
-                        place.get("websiteUri", "Brak strony"),
-                        place["displayName"]["text"] if "displayName" in place else "Brak nazwy",
-                        place.get("formattedAddress", "Brak adresu"),
-                        phone_number
-                    ])
+                                places_data.append([
+                                    term,
+                                    place.get("websiteUri", "Brak strony"),
+                                    place["displayName"]["text"] if "displayName" in place else "Brak nazwy",
+                                    place.get("formattedAddress", "Brak adresu"),
+                                    phone_number
+                                ])
 
-                    # Aktualizacja paska postępu (ograniczenie do 100%)
-                    if progress_bar.n < progress_bar.total:
-                        progress_bar.update(1)
+                                # Aktualizacja paska postępu
+                                if progress_bar.n < progress_bar.total:
+                                    progress_bar.update(1)
 
-            next_page_token = data.get("nextPageToken", None)
+                        next_page_token = data.get("nextPageToken", None)
+                        break  # Jeśli zapytanie powiodło się, wychodzimy z pętli retry
+                except aiohttp.ClientError as e:
+                    print(f"⚠️ Błąd sieci: {e}. Ponawianie próby...")
+                    await asyncio.sleep(2)  # Ponowienie próby po krótkim czasie
+            else:
+                print("❌ Błąd: Nie udało się pobrać danych po 3 próbach.")
 
-            if not next_page_token:
-                break
+        if not next_page_token:
+            break
 
-            first_request = False
+        first_request = False
 
     return places_data
 
 async def get_places(city_name, radius):
     """ Wysyła równolegle zapytania dla wszystkich kategorii z promieniem. """
-    async with aiohttp.ClientSession() as session:
+    async with ClientSession(timeout=ClientTimeout(total=60)) as session:
         location = await get_city_coordinates(session, city_name)
         if not location:
             return []
 
-        # Inicjalizacja paska postępu (poprawiona wersja)
+        # Inicjalizacja paska postępu
         total_estimated = len(SEARCH_CATEGORIES) * 60  # Szacowana liczba firm
         progress_bar = tqdm(total=total_estimated, desc=f"📊 Szukanie firm w {city_name}", unit=" firm", bar_format="{l_bar}{bar} {percentage:3.0f}%")
 
@@ -124,7 +142,7 @@ async def get_places(city_name, radius):
 
     # Po każdym wyszukaniu od razu zapisujemy do Excela
     save_to_excel(places_data)
-    print(f"✅ Zapisano {len(places_data)} firm z numerem telefonu.\n")
+    print(f"✅ Zapisano {len(places_data)} firm.\n")
 
 # Pętla do wielokrotnego wyszukiwania miast
 async def main():
