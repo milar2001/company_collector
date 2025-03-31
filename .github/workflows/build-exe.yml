@@ -2,7 +2,7 @@ name: Build EXE
 
 on:
   push:
-    branches: [main]  # lub inny branch
+    branches: [main]  # możesz zmienić na inny branch jeśli chcesz
 
 jobs:
   build:
@@ -22,12 +22,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyinstaller
 
-    - name: Build .exe
+    - name: Build .exe with icon
       run: |
         pyinstaller --onefile --name "SzukajkaFirm" --icon="icona.ico" main.py
 
     - name: Upload .exe as artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: my-program
-        path: dist/main.exe
+        name: SzukajkaFirm
+        path: dist/SzukajkaFirm.exe
