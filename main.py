@@ -1,8 +1,11 @@
 import json
 import asyncio
 import aiohttp
-from tqdm import tqdm  # Pasek postępu
+from tqdm import tqdm
 from excel_saver import save_to_excel
+from config import APP_VERSION
+
+print(f"Aktualna wersja: {APP_VERSION}")
 
 # Wczytanie klucza API
 with open("config.json", "r", encoding="utf-8") as f:
