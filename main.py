@@ -5,7 +5,7 @@ from tqdm import tqdm
 from excel_saver import save_to_excel
 from auto_updater import check_for_update
 
-check_for_update() # Sprawdzanie aktualizacji aplikacji
+check_for_update()
 
 # Wczytanie klucza API
 with open("config.json", "r", encoding="utf-8") as f:
