@@ -1,11 +1,11 @@
-name: Build EXE
+name: Auto Version + Build + Release
 
 on:
   push:
-    branches: [main]  # lub inny branch
+    branches: [main]
 
 jobs:
-  build:
+  build-release:
     runs-on: windows-latest
 
     steps:
@@ -15,19 +15,47 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: 3.10
+
+    - name: Get latest tag and bump patch version
+      id: versioning
+      run: |
+        git fetch --tags
+        $latest = git tag --sort=-v:refname | Select-Object -First 1
+        if (-not $latest) { $latest = "v0.0.0" }
+        $split = $latest.TrimStart("v").Split(".")
+        $major = [int]$split[0]
+        $minor = [int]$split[1]
+        $patch = [int]$split[2] + 1
+        $new = "v$major.$minor.$patch"
+        echo "NEW_VERSION=$new" >> $env:GITHUB_ENV
+
+    - name: Update APP_VERSION in config.py
+      run: |
+        (Get-Content config.py) -replace 'APP_VERSION\s*=\s*".*"', 'APP_VERSION = "${{ env.NEW_VERSION.TrimStart("v") }}"' | Set-Content config.py
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        git add config.py
+        git commit -m "Bump version to ${{ env.NEW_VERSION }}"
+        git push
+
+    - name: Create new Git tag
+      run: |
+        git tag ${{ env.NEW_VERSION }}
+        git push origin ${{ env.NEW_VERSION }}
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
         pip install pyinstaller
 
-    - name: Build .exe
+    - name: Build EXE
       run: |
         pyinstaller --onefile --name "SzukajkaFirm" --icon="icona.ico" main.py
 
-    - name: Upload .exe as artifact
-      uses: actions/upload-artifact@v3
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
       with:
-        name: my-program
-        path: dist/main.exe
+        tag_name: ${{ env.NEW_VERSION }}
+        files: dist/SzukajkaFirm.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
