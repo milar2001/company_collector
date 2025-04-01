@@ -47,7 +47,7 @@ def launch_updater_bat(current_exe, new_exe):
         bat_path = os.path.join(tempfile.gettempdir(), "update.bat")
         with open(bat_path, "w", encoding="utf-8") as f:
             f.write(f"""@echo off
-echo 🔄 Czekam aż zamknie się aplikacja...
+echo 🔄 Czekam az zamknie sie aplikacja...
 :loop
 tasklist | findstr /I "{os.path.basename(current_exe)}" >nul
 if not errorlevel 1 (
