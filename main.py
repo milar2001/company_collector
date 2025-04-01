@@ -3,9 +3,9 @@ import asyncio
 import aiohttp
 from tqdm import tqdm
 from excel_saver import save_to_excel
-from config import APP_VERSION
+from auto_updater import check_for_update
 
-print(f"Aktualna wersja: {APP_VERSION}")
+check_for_update() # Sprawdzanie aktualizacji aplikacji
 
 # Wczytanie klucza API
 with open("config.json", "r", encoding="utf-8") as f:
@@ -159,5 +159,4 @@ async def main():
         await get_places(city_name, radius_m)
 
 
-# Uruchamiamy pętlę wyszukiwania
 asyncio.run(main())
