@@ -5,14 +5,19 @@ from tqdm import tqdm
 from excel_saver import save_to_excel
 from auto_updater import check_for_update
 import math
-
+import logger_util
 
 check_for_update()
 
 # Wczytanie klucza API
-with open("config.json", "r", encoding="utf-8") as f:
-    config = json.load(f)
-API_KEY = config["API_KEY"]
+try:
+    with open("config.json", "r", encoding="utf-8") as f:
+        config = json.load(f)
+    API_KEY = config["API_KEY"]
+    logger_util.log_info("✅ Wczytano klucz API.")
+except Exception as e:
+    logger_util.log_error(f"Błąd wczytywania config.json: {e}")
+    exit()
 
 # Wczytanie kategorii z pliku categories.json
 try:
@@ -20,37 +25,49 @@ try:
         categories = json.load(f)
     SEARCH_CATEGORIES = categories.get("categories", [])
     if not SEARCH_CATEGORIES:
-        raise ValueError("Plik categories.json nie zawiera żadnych kategorii!")
+        logger_util.log_error("Plik categories.json nie zawiera żadnych kategorii!")
 except Exception as e:
-    print(f"❌ Błąd wczytywania pliku categories.json: {e}")
+    logger_util.log_error(f"❌ Błąd wczytywania pliku categories.json: {e}")
     exit()
 
 def calculate_bounds(lat, lng, radius_m):
-    # 1 stopień szerokości geograficznej to ok. 111 km
-    delta_lat = radius_m / 111000
-    # 1 stopień długości zależy od szerokości (im dalej od równika, tym mniejszy)
-    delta_lng = radius_m / (111000 * abs(math.cos(math.radians(lat))) + 1e-6)
-
-    return {
-        "low": {"latitude": lat - delta_lat, "longitude": lng - delta_lng},
-        "high": {"latitude": lat + delta_lat, "longitude": lng + delta_lng}
-    }
+    try:
+        delta_lat = radius_m / 111000
+        delta_lng = radius_m / (111000 * abs(math.cos(math.radians(lat))) + 1e-6)
+        return {
+            "low": {"latitude": lat - delta_lat, "longitude": lng - delta_lng},
+            "high": {"latitude": lat + delta_lat, "longitude": lng + delta_lng}
+        }
+    except Exception as e:
+        logger_util.log_error(f"Błąd w calculate_bounds: {e}")
+        return {
+            "low": {"latitude": lat, "longitude": lng},
+            "high": {"latitude": lat, "longitude": lng}
+        }
 
 # Pobieranie współrzędnych miasta
 async def get_city_coordinates(session, city_name):
-    base_url = "https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"address": city_name, "key": API_KEY}
+    try:
+        base_url = "https://maps.googleapis.com/maps/api/geocode/json"
+        params = {"address": city_name, "key": API_KEY}
 
-    async with session.get(base_url, params=params) as response:
-        data = await response.json()
+        async with session.get(base_url, params=params) as response:
+            if response.status != 200:
+                text = await response.text()
+                logger_util.log_error(f"❌ Błąd API geocode ({response.status}): {text}")
+                return None
+            data = await response.json()
 
-    if "results" in data and len(data["results"]) > 0:
-        location = data["results"][0]["geometry"]["location"]
-        return {"lat": location["lat"], "lng": location["lng"]}
+        if "results" in data and len(data["results"]) > 0:
+            location = data["results"][0]["geometry"]["location"]
+            return {"lat": location["lat"], "lng": location["lng"]}
 
-    print(f"❌ Nie znaleziono współrzędnych dla miasta: {city_name}")
-    return None
-
+        logger_util.log_warning(f"❌ Nie znaleziono współrzędnych dla miasta: {city_name}")
+        print(f"❌ Nie znaleziono współrzędnych dla miasta: {city_name}")
+        return None
+    except Exception as e:
+        logger_util.log_error(f"Błąd w get_city_coordinates: {e}")
+        return None
 
 # Pobieranie firm z Google Places API z obsługą paginacji
 async def fetch_places(session, term, location, radius, progress_bar):
@@ -68,14 +85,8 @@ async def fetch_places(session, term, location, radius, progress_bar):
             "textQuery": term,
             "locationRestriction": {
                 "rectangle": {
-                    "low": {
-                        "latitude": bounds["low"]["latitude"],
-                        "longitude": bounds["low"]["longitude"]
-                    },
-                    "high": {
-                        "latitude": bounds["high"]["latitude"],
-                        "longitude": bounds["high"]["longitude"]
-                    }
+                    "low": bounds["low"],
+                    "high": bounds["high"]
                 }
             }
         }
@@ -89,87 +100,103 @@ async def fetch_places(session, term, location, radius, progress_bar):
             "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.googleMapsUri,places.internationalPhoneNumber,places.websiteUri,nextPageToken"
         }
 
-        async with session.post("https://places.googleapis.com/v1/places:searchText", json=params,
-                                headers=headers) as response:
-            data = await response.json()
+        try:
+            async with session.post("https://places.googleapis.com/v1/places:searchText", json=params,
+                                    headers=headers) as response:
+                if response.status != 200:
+                    text = await response.text()
+                    logger_util.log_error(f"❌ Błąd zapytania ({response.status}): {text}")
+                    return []
 
-            if "places" in data:
-                for place in data["places"]:
-                    website = place.get("websiteUri", None)
-                    phone_number = place.get("internationalPhoneNumber", None)
+                if response.content_type != 'application/json':
+                    text = await response.text()
+                    logger_util.log_error(f"❌ Nieoczekiwany typ odpowiedzi: {response.content_type}, treść: {text}")
+                    return []
 
-                    if not phone_number or not website:
-                        continue
+                data = await response.json()
+        except Exception as e:
+            logger_util.log_error(f"❌ Błąd przetwarzania odpowiedzi API ({term}): {e}")
+            return []
 
-                    places_data.append([
-                        term,
-                        website,
-                        place["displayName"]["text"] if "displayName" in place else "Brak nazwy",
-                        place.get("formattedAddress", "Brak adresu"),
-                        phone_number
-                    ])
+        if "places" in data:
+            for place in data["places"]:
+                website = place.get("websiteUri", None)
+                phone_number = place.get("internationalPhoneNumber", None)
 
-                    if progress_bar.n < progress_bar.total:
-                        progress_bar.update(1)
+                if not phone_number or not website:
+                    continue
 
-            next_page_token = data.get("nextPageToken", None)
+                places_data.append([
+                    term,
+                    website,
+                    place["displayName"]["text"] if "displayName" in place else "Brak nazwy",
+                    place.get("formattedAddress", "Brak adresu"),
+                    phone_number
+                ])
 
-            if not next_page_token:
-                break
+                if progress_bar.n < progress_bar.total:
+                    progress_bar.update(1)
 
-            first_request = False
+        next_page_token = data.get("nextPageToken", None)
+        if not next_page_token:
+            break
+
+        first_request = False
 
     return places_data
 
 async def get_places(city_name, radius):
-    """ Wysyła równolegle zapytania dla wszystkich kategorii z promieniem. """
-    async with aiohttp.ClientSession() as session:
-        location = await get_city_coordinates(session, city_name)
-        if not location:
-            return []
+    try:
+        async with aiohttp.ClientSession() as session:
+            location = await get_city_coordinates(session, city_name)
+            if not location:
+                return []
 
-        # Inicjalizacja paska postępu (poprawiona wersja)
-        total_estimated = len(SEARCH_CATEGORIES) * 60  # Szacowana liczba firm
-        progress_bar = tqdm(total=total_estimated, desc=f"📊 Szukanie firm w {city_name}", unit=" firm",
-                            bar_format="{l_bar}{bar} {percentage:3.0f}%")
+            total_estimated = len(SEARCH_CATEGORIES) * 60
+            progress_bar = tqdm(total=total_estimated, desc=f"📊 Szukanie firm w {city_name}", unit=" firm",
+                                bar_format="{l_bar}{bar} {percentage:3.0f}%")
 
-        tasks = [fetch_places(session, term, location, radius, progress_bar) for term in SEARCH_CATEGORIES]
-        results = await asyncio.gather(*tasks)
+            tasks = [fetch_places(session, term, location, radius, progress_bar) for term in SEARCH_CATEGORIES]
+            results = await asyncio.gather(*tasks)
 
-        # Po zakończeniu ustawienie paska na 100%
-        progress_bar.n = progress_bar.total
-        progress_bar.refresh()
-        progress_bar.close()
+            progress_bar.n = progress_bar.total
+            progress_bar.refresh()
+            progress_bar.close()
 
-    # Łączymy wyniki ze wszystkich kategorii
-    places_data = [place for result in results for place in result]
-
-    # Po każdym wyszukaniu od razu zapisujemy do Excela
-    save_to_excel(places_data)
-    print(f"✅ Znaleziono {len(places_data)} firm.\n")
-
+        places_data = [place for result in results for place in result]
+        save_to_excel(places_data)
+        logger_util.log_info(f"✅ Znaleziono {len(places_data)} firm.")
+        print(f"✅ Znaleziono {len(places_data)} firm.\n")
+    except Exception as e:
+        logger_util.log_error(f"❌ Błąd w get_places: {e}")
 
 # Pętla do wielokrotnego wyszukiwania miast
 async def main():
-    while True:
-        city_name = input("\n🔍 Podaj nazwę miasta, które chcesz przeszukać (lub naciśnij Enter, aby zakończyć): ")
-        if city_name.strip() == "":
-            print("✅ Program zakończony.")
-            break
-
+    try:
         while True:
-            try:
-                radius_km = float(input("📍 Podaj promień wyszukiwania w kilometrach (maksymalnie 50 km): "))
-                radius_m = int(radius_km * 1000)  # Konwersja km na metry
-                if 0 < radius_m <= 50000:
-                    break
-                else:
-                    print("❌ Błąd: Podaj liczbę z zakresu 1 - 50 km.")
-            except ValueError:
-                print("❌ Błąd: Wprowadź poprawną liczbę (np. 5, 10, 25).")
+            city_name = input("\n🔍 Podaj nazwę miasta, które chcesz przeszukać (lub naciśnij Enter, aby zakończyć): ")
+            if city_name.strip() == "":
+                logger_util.log_info("✅ Program zakończony.")
+                print("✅ Program zakończony.")
+                break
 
-        # Pobieramy dane firm i od razu zapisujemy do Excela
-        await get_places(city_name, radius_m)
+            while True:
+                try:
+                    radius_km = float(input("📍 Podaj promień wyszukiwania w kilometrach (maksymalnie 50 km): "))
+                    radius_m = int(radius_km * 1000)
+                    if 0 < radius_m <= 50000:
+                        break
+                    else:
+                        logger_util.log_error("❌ Błąd: Została wprowadzona zła liczba spoza zakresu.")
+                        print("❌ Błąd: Podaj liczbę z zakresu 1 - 50 km.")
+                except ValueError:
+                    logger_util.log_error("❌ Błąd: Wprowadzono niepoprawną wartość promienia.")
+                    print("❌ Błąd: Wprowadź poprawną liczbę (np. 5, 10, 25).")
 
+            logger_util.log_info(f"✅ Podano miasto: {city_name}")
+            logger_util.log_info(f"✅ Podano promień: {radius_km} km")
+            await get_places(city_name, radius_m)
+    except Exception as e:
+        logger_util.log_error(f"❌ Błąd w głównej pętli programu: {e}")
 
 asyncio.run(main())

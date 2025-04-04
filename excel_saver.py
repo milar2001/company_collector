@@ -6,13 +6,17 @@ from openpyxl.styles import PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.formatting.rule import FormulaRule
 from datetime import datetime
+import logger_util
+
 
 def save_to_excel(new_data, filename="firmy.xlsx"):
     today = datetime.today().strftime('%Y-%m-%d')
 
     if os.path.exists(filename):
+        logger_util.log_info(f"✅ Otwieramy {filename}")
         book = load_workbook(filename)
     else:
+        logger_util.log_info(f"✅ Tworzymy nowy {filename}")
         book = Workbook()
 
     # Pobierz lub utwórz arkusz dzisiejszy
@@ -93,4 +97,5 @@ def save_to_excel(new_data, filename="firmy.xlsx"):
     sheet.auto_filter.ref = sheet.dimensions
 
     book.save(filename)
+    logger_util.log_info(f"✅ Dodano {len(new_unique_df)} nowych rekordów do {filename}.")
     print(f"✅ Dodano {len(new_unique_df)} nowych rekordów do {filename}.")
