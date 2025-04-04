@@ -4,6 +4,8 @@ import aiohttp
 from tqdm import tqdm
 from excel_saver import save_to_excel
 from auto_updater import check_for_update
+import math
+
 
 check_for_update()
 
@@ -23,6 +25,16 @@ except Exception as e:
     print(f"❌ Błąd wczytywania pliku categories.json: {e}")
     exit()
 
+def calculate_bounds(lat, lng, radius_m):
+    # 1 stopień szerokości geograficznej to ok. 111 km
+    delta_lat = radius_m / 111000
+    # 1 stopień długości zależy od szerokości (im dalej od równika, tym mniejszy)
+    delta_lng = radius_m / (111000 * abs(math.cos(math.radians(lat))) + 1e-6)
+
+    return {
+        "low": {"latitude": lat - delta_lat, "longitude": lng - delta_lng},
+        "high": {"latitude": lat + delta_lat, "longitude": lng + delta_lng}
+    }
 
 # Pobieranie współrzędnych miasta
 async def get_city_coordinates(session, city_name):
@@ -42,25 +54,28 @@ async def get_city_coordinates(session, city_name):
 
 # Pobieranie firm z Google Places API z obsługą paginacji
 async def fetch_places(session, term, location, radius, progress_bar):
-    """ Pobiera firmy z API Google Places dla danej frazy i paginuje wyniki. """
     places_data = []
     next_page_token = None
     first_request = True
 
+    bounds = calculate_bounds(location["lat"], location["lng"], radius)
+
     while True:
         if next_page_token and not first_request:
-            await asyncio.sleep(5)  # Oczekiwanie wymagane przez Google API
+            await asyncio.sleep(5)
 
         params = {
             "textQuery": term,
-            "pageSize": 20,
-            "locationBias": {
-                "circle": {
-                    "center": {
-                        "latitude": location["lat"],
-                        "longitude": location["lng"]
+            "locationRestriction": {
+                "rectangle": {
+                    "low": {
+                        "latitude": bounds["low"]["latitude"],
+                        "longitude": bounds["low"]["longitude"]
                     },
-                    "radius": radius
+                    "high": {
+                        "latitude": bounds["high"]["latitude"],
+                        "longitude": bounds["high"]["longitude"]
+                    }
                 }
             }
         }
@@ -80,21 +95,20 @@ async def fetch_places(session, term, location, radius, progress_bar):
 
             if "places" in data:
                 for place in data["places"]:
-                    website = place.get("websiteUri", None)  # Pobieramy stronę www
+                    website = place.get("websiteUri", None)
                     phone_number = place.get("internationalPhoneNumber", None)
 
-                    if not phone_number or not website:  # Pomijamy firmy bez numeru telefonu i strony
+                    if not phone_number or not website:
                         continue
 
                     places_data.append([
                         term,
-                        website,  # Zapisujemy tylko firmy, które mają stronę
+                        website,
                         place["displayName"]["text"] if "displayName" in place else "Brak nazwy",
                         place.get("formattedAddress", "Brak adresu"),
                         phone_number
                     ])
 
-                    # Aktualizacja paska postępu (ograniczenie do 100%)
                     if progress_bar.n < progress_bar.total:
                         progress_bar.update(1)
 
@@ -106,7 +120,6 @@ async def fetch_places(session, term, location, radius, progress_bar):
             first_request = False
 
     return places_data
-
 
 async def get_places(city_name, radius):
     """ Wysyła równolegle zapytania dla wszystkich kategorii z promieniem. """
@@ -133,7 +146,7 @@ async def get_places(city_name, radius):
 
     # Po każdym wyszukaniu od razu zapisujemy do Excela
     save_to_excel(places_data)
-    print(f"✅ Zapisano {len(places_data)} firm z numerem telefonu.\n")
+    print(f"✅ Znaleziono {len(places_data)} firm.\n")
 
 
 # Pętla do wielokrotnego wyszukiwania miast
