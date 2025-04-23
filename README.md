@@ -69,7 +69,7 @@ python main.py
 - Aktywny billing
 - Skonfigurowany API_KEY
 
-## 💡 Wskazówki do portfolio
+## 🛠 Cechy projektu
 
 - 👨‍💻 Asynchroniczne API + integracja z Google Cloud
 - 📚 Podział na moduły, czyste logowanie, realny use-case
@@ -83,7 +83,7 @@ Projekt do celów edukacyjnych i portfolio. Nie przeznaczony do użytku komercyj
 
 ## 🧠 Autor
 
-Projekt stworzony przez [Twoje Imię lub nick].
+Projekt stworzony przez [Maciej Milarski](https://www.linkedin.com/in/mmilarski/).
 
 </details>
 
@@ -160,7 +160,7 @@ python main.py
 - Billing enabled
 - Proper API_KEY setup
 
-## 💡 Portfolio Tips
+## 🛠 Project Highlights
 
 - 👨‍💻 Show async API use and modular design
 - 📚 Strong separation of concerns and real use-case
@@ -174,7 +174,7 @@ Created for educational and portfolio purposes.
 
 ## 🧠 Author
 
-Created and maintained by [Your Name or GitHub handle].
+Created and maintained by [Maciej Milarski](https://www.linkedin.com/in/mmilarski/).
 
 </details>
 
