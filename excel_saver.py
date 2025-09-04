@@ -9,6 +9,11 @@ from datetime import datetime
 import logger_util
 
 
+def _norm_phone(s: str) -> str:
+    """Zwraca numer złożony wyłącznie z cyfr (do porównań)."""
+    return ''.join(ch for ch in str(s) if ch.isdigit())
+
+
 def save_to_excel(new_data, filename="firmy.xlsx"):
     today = datetime.today().strftime('%Y-%m-%d')
 
@@ -24,8 +29,14 @@ def save_to_excel(new_data, filename="firmy.xlsx"):
         sheet = book[today]
         try:
             existing_df = pd.read_excel(filename, sheet_name=today)
-            existing_decisions = existing_df.set_index("Numer Telefonu")["Odrzucić?"].to_dict()
-        except:
+            # Upewnij się, że kolumny istnieją
+            if "Numer Telefonu" not in existing_df.columns:
+                existing_df["Numer Telefonu"] = ""
+            if "Odrzucić?" not in existing_df.columns:
+                existing_df["Odrzucić?"] = ""
+            existing_df["__PhoneNorm__"] = existing_df["Numer Telefonu"].astype(str).apply(_norm_phone)
+            existing_decisions = existing_df.set_index("__PhoneNorm__")["Odrzucić?"].to_dict()
+        except Exception:
             existing_df = pd.DataFrame(columns=["Branża", "Strona WWW", "Nazwa Firmy", "Adres", "Numer Telefonu", "Odrzucić?"])
             existing_decisions = {}
     else:
@@ -34,55 +45,63 @@ def save_to_excel(new_data, filename="firmy.xlsx"):
         existing_df = pd.DataFrame(columns=["Branża", "Strona WWW", "Nazwa Firmy", "Adres", "Numer Telefonu", "Odrzucić?"])
         existing_decisions = {}
 
-    # Utwórz zbior wszystkich numerów z pliku
+    # Zbiór WSZYSTKICH numerów z pliku (znormalizowanych)
     all_existing_numbers = set()
     for sheet_name in book.sheetnames:
         try:
             df = pd.read_excel(filename, sheet_name=sheet_name)
             if "Numer Telefonu" in df.columns:
-                all_existing_numbers.update(df["Numer Telefonu"].dropna().astype(str).tolist())
-        except:
+                all_existing_numbers.update(
+                    df["Numer Telefonu"].dropna().astype(str).apply(_norm_phone).tolist()
+                )
+        except Exception:
             continue
 
+    # Ramka z nowymi danymi
     new_df = pd.DataFrame(new_data, columns=["Branża", "Strona WWW", "Nazwa Firmy", "Adres", "Numer Telefonu"])
     new_df["Strona WWW"] = new_df["Strona WWW"].fillna("Brak strony")
     new_df["Numer Telefonu"] = new_df["Numer Telefonu"].astype(str)
+    new_df["__PhoneNorm__"] = new_df["Numer Telefonu"].apply(_norm_phone)
 
-    new_unique_df = new_df[~new_df["Numer Telefonu"].isin(all_existing_numbers)].copy()
-    new_unique_df["Odrzucić?"] = new_unique_df["Numer Telefonu"].map(existing_decisions).fillna("")
+    # 1) Usuń duplikaty w bieżącym wsadzie po numerze
+    new_df = new_df.drop_duplicates(subset="__PhoneNorm__", keep="first")
+
+    # 2) Usuń rekordy, które już są w pliku (po znormalizowanym numerze)
+    new_unique_df = new_df[~new_df["__PhoneNorm__"].isin(all_existing_numbers)].copy()
+
+    # 3) Przenieś wcześniejsze decyzje po kluczu znormalizowanym
+    new_unique_df["Odrzucić?"] = new_unique_df["__PhoneNorm__"].map(existing_decisions).fillna("")
 
     # Walidacja TAK/NIE
     existing_validation = DataValidation(type="list", formula1='"TAK,NIE"', allow_blank=True)
     sheet.add_data_validation(existing_validation)
 
-    # Formatowanie warunkowe - relatywna formuła
+    # Formatowanie warunkowe – wiersz na czerwono, gdy H=="TAK"
     red_fill = PatternFill(start_color="FF9999", end_color="FF9999", fill_type="solid")
-    formula = '$H2="TAK"'  # użyj dokładnego wiersza
-    rule = FormulaRule(formula=[formula], fill=red_fill)
 
-    # Zapamiętaj od której linii zaczynamy dopisywać
+    # Od której linii dopisujemy
     start_row = sheet.max_row + 1
 
-    for i, row in enumerate(new_unique_df.itertuples(index=False), start=start_row):
-        sheet[f"A{i}"] = row[0]  # Branża
-        if row[1] == "Brak strony":
+    # Zapis bez kolumny pomocniczej
+    for i, (_, r) in enumerate(new_unique_df.iterrows(), start=start_row):
+        sheet[f"A{i}"] = r["Branża"]
+        if r["Strona WWW"] == "Brak strony":
             sheet[f"B{i}"] = "Brak strony"
         else:
             sheet[f"B{i}"].value = "Kliknij tutaj"
-            sheet[f"B{i}"].hyperlink = row[1]
-        sheet[f"C{i}"] = row[2]  # Nazwa firmy
-        sheet[f"E{i}"] = row[3]  # Adres
-        sheet[f"G{i}"] = row[4]  # Numer telefonu
-        sheet[f"H{i}"] = row[5]  # Odrzucić?
+            sheet[f"B{i}"].hyperlink = r["Strona WWW"]
+        sheet[f"C{i}"] = r["Nazwa Firmy"]
+        sheet[f"E{i}"] = r["Adres"]
+        sheet[f"G{i}"] = r["Numer Telefonu"]
+        sheet[f"H{i}"] = r["Odrzucić?"]
 
+        # walidacja listy
         existing_validation.add(sheet[f"H{i}"])
 
-    end_row = start_row + len(new_unique_df) - 1
-    if len(new_unique_df) > 0:
-        for i in range(start_row, end_row + 1):
-            formula = f'$H{i}="TAK"'
-            rule = FormulaRule(formula=[formula], fill=red_fill)
-            sheet.conditional_formatting.add(f"A{i}:G{i}", rule)
+        # reguła formatowania dla tego wiersza
+        formula = f'$H{i}="TAK"'
+        rule = FormulaRule(formula=[formula], fill=red_fill)
+        sheet.conditional_formatting.add(f"A{i}:G{i}", rule)
 
     # Dostosowanie szerokości kolumn
     for col in sheet.columns:
@@ -98,4 +117,5 @@ def save_to_excel(new_data, filename="firmy.xlsx"):
 
     book.save(filename)
     logger_util.log_info(f"✅ Dodano {len(new_unique_df)} nowych rekordów do {filename}.")
-    print(f"✅ Dodano {len(new_unique_df)} nowych rekordów do {filename}.")
+    # print(f"✅ Dodano {len(new_unique_df)} nowych rekordów do {filename}.")  # wyciszone w GUI
+    return len(new_unique_df)

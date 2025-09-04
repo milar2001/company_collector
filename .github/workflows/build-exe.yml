@@ -18,10 +18,11 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: 3.10
+        python-version: "3.10"
 
     - name: Get latest tag and bump patch version
       id: versioning
+      shell: pwsh
       run: |
         git fetch --tags
         $latest = git tag --sort=-v:refname | Select-Object -First 1
@@ -34,6 +35,7 @@ jobs:
         echo "NEW_VERSION=$new" >> $env:GITHUB_ENV
 
     - name: Update APP_VERSION in config.py
+      shell: pwsh
       run: |
         $raw = "${{ env.NEW_VERSION }}"
         $clean = $raw.TrimStart("v")
@@ -45,6 +47,7 @@ jobs:
         git push
 
     - name: Create new Git tag
+      shell: pwsh
       run: |
         git tag ${{ env.NEW_VERSION }}
         git push origin ${{ env.NEW_VERSION }}
@@ -52,11 +55,11 @@ jobs:
     - name: Install dependencies
       run: |
         pip install -r requirements.txt
-        pip install pyinstaller
+        pip install pyinstaller PySide6 qasync
 
-    - name: Build EXE
+    - name: Build EXE (GUI)
       run: |
-        pyinstaller --onefile --name "SzukajkaFirm" --icon="icona.ico" main.py
+        pyinstaller --noconsole --onefile --name "SzukajkaFirm" --icon "icona.ico" main_gui.py
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1

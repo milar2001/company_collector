@@ -58,7 +58,7 @@ pip install -r requirements.txt
 
 5. Uruchom program:
 ```bash
-python main.py
+python collector_core.py
 ```
 
 ## ⚠️ Wymagania
@@ -149,7 +149,7 @@ pip install -r requirements.txt
 
 5. Run the app:
 ```bash
-python main.py
+python collector_core.py
 ```
 
 ## ⚠️ Requirements
